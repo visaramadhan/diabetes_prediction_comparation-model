@@ -1,0 +1,28 @@
+prediction_dm/
+├── backend/                  # Backend Flask
+│   ├── app.py               # Aplikasi Flask utama
+│   ├── requirements.txt     # Dependensi Python
+│   ├── models/              # Model machine learning
+│   │   ├── __init__.py
+│   │   ├── random_forest.py # Implementasi Random Forest
+│   │   ├── svm.py           # Implementasi SVM
+│   │   └── logistic.py      # Implementasi Logistic Regression
+│   ├── feature_selection/   # Implementasi seleksi fitur
+│   │   ├── __init__.py
+│   │   ├── rfe.py           # Recursive Feature Elimination
+│   │   └── bfs.py           # Boruta Feature Selection
+│   ├── utils/               # Fungsi utilitas
+│   │   ├── __init__.py
+│   │   ├── data_loader.py   # Fungsi untuk memuat data
+│   │   └── metrics.py       # Fungsi untuk evaluasi model
+│   └── static/              # File statis
+│       └── uploads/         # Direktori untuk file yang diupload
+└── frontend/                # Frontend Next.js
+    ├── package.json         # Dependensi Node.js
+    ├── next.config.js       # Konfigurasi Next.js
+    ├── public/              # File statis
+    ├── styles/              # File CSS
+    └── pages/               # Halaman Next.js
+        ├── index.js         # Halaman utama
+        ├── upload.js        # Halaman upload file
+        └── results.js       # Halaman hasil prediksi
