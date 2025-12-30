@@ -506,18 +506,30 @@ def training_train(session_id):
         return jsonify({'error': 'Session not found'}), 404
     X_train = sessions[session_id].get('X_train')
     y_train = sessions[session_id].get('y_train')
+    X_test = sessions[session_id].get('X_test')
+    y_test = sessions[session_id].get('y_test')
     if X_train is None or y_train is None:
         return jsonify({'error': 'Data not split yet'}), 400
+    if X_test is None or y_test is None:
+        return jsonify({'error': 'Test set not available. Run split first.'}), 400
 
     # Ensure y_train is integer/numeric for classification
     try:
         y_train = y_train.astype(int)
+        try:
+            y_test = y_test.astype(int)
+        except Exception:
+            pass
     except:
         # Try encoding if string
         from sklearn.preprocessing import LabelEncoder
         le = LabelEncoder()
         y_train = le.fit_transform(y_train)
         sessions[session_id]['label_encoder'] = le
+        try:
+            y_test = le.transform(y_test)
+        except Exception:
+            y_test = y_test
 
     payload = request.get_json(silent=True) or {}
     epochs = int(payload.get('epochs', 100))
@@ -551,18 +563,19 @@ def training_train(session_id):
             start_time = time.time()
             m.fit(X_train, y_train)
             duration = time.time() - start_time
-            score = float(m.score(X_train, y_train))
-            logs.append(f"[Baseline] {name}: Acc={score:.2%} ({duration:.2f}s)")
+            score_train = float(m.score(X_train, y_train))
+            score_test = float(m.score(X_test, y_test))
+            logs.append(f"[Baseline] {name}: Train={score_train:.2%} | Val={score_test:.2%} ({duration:.2f}s)")
             
             comparison_results.append({
                 'phase': 'Baseline',
                 'model': name,
-                'accuracy': score,
+                'accuracy': score_test,
                 'duration': duration
             })
 
-            if score > best_global_score:
-                best_global_score = score
+            if score_test > best_global_score:
+                best_global_score = score_test
                 best_global_model = m
                 best_global_name = f"{name} (Baseline)"
                 # Clear feature mask for baseline
@@ -578,7 +591,9 @@ def training_train(session_id):
         # Select top 50% features
         X_train_rfe = rfe.select_features(X_train, y_train)
         selected_rfe_cols = rfe.get_selected_features()
+        rfe_scores = rfe.get_feature_scores()
         logs.append(f"RFE selected {len(selected_rfe_cols)} features: {', '.join(selected_rfe_cols[:5])}...")
+        X_test_rfe = sessions[session_id]['X_test'][selected_rfe_cols]
         
         # Train on RFE data
         models_rfe = get_models()
@@ -587,18 +602,19 @@ def training_train(session_id):
                 start_time = time.time()
                 m.fit(X_train_rfe, y_train)
                 duration = time.time() - start_time
-                score = float(m.score(X_train_rfe, y_train))
-                logs.append(f"[RFE] {name}: Acc={score:.2%} ({duration:.2f}s)")
+                score_train = float(m.score(X_train_rfe, y_train))
+                score_test = float(m.score(X_test_rfe, y_test))
+                logs.append(f"[RFE] {name}: Train={score_train:.2%} | Val={score_test:.2%} ({duration:.2f}s)")
                 
                 comparison_results.append({
                     'phase': 'RFE',
                     'model': name,
-                    'accuracy': score,
+                    'accuracy': score_test,
                     'duration': duration
                 })
 
-                if score > best_global_score:
-                    best_global_score = score
+                if score_test > best_global_score:
+                    best_global_score = score_test
                     best_global_model = m
                     best_global_name = f"{name} (RFE)"
                     sessions[session_id]['feature_mask'] = ('rfe', selected_rfe_cols)
@@ -607,123 +623,79 @@ def training_train(session_id):
     except Exception as e:
         logs.append(f"RFE Selection Failed: {str(e)}")
 
-    # --- Phase 3: Boruta Selection (BFS) ---
-    logs.append("\n=== Phase 3: Feature Selection (Boruta) ===")
-    try:
-        # Boruta can be slow, use with caution on large data
-        bfs = BorutaSelector()
-        # Boruta needs numpy y
-        y_train_np = y_train if hasattr(y_train, 'values') else np.array(y_train)
-        
-        X_train_bfs = bfs.select_features(X_train, y_train_np)
-        selected_bfs_cols = bfs.get_selected_features()
-        
-        if len(selected_bfs_cols) == 0:
-             logs.append("Boruta found no relevant features. Skipping BFS training.")
-        else:
-            logs.append(f"Boruta selected {len(selected_bfs_cols)} features: {', '.join(selected_bfs_cols[:5])}...")
-            
-            # Train on BFS data
-            models_bfs = get_models()
-            for name, m in models_bfs:
-                try:
-                    start_time = time.time()
-                    m.fit(X_train_bfs, y_train)
-                    duration = time.time() - start_time
-                    score = float(m.score(X_train_bfs, y_train))
-                    logs.append(f"[BFS] {name}: Acc={score:.2%} ({duration:.2f}s)")
-                    
-                    comparison_results.append({
-                        'phase': 'Boruta',
-                        'model': name,
-                        'accuracy': score,
-                        'duration': duration
-                    })
-
-                    if score > best_global_score:
-                        best_global_score = score
-                        best_global_model = m
-                        best_global_name = f"{name} (Boruta)"
-                        sessions[session_id]['feature_mask'] = ('bfs', selected_bfs_cols)
-                except Exception as e:
-                    logs.append(f"[BFS] {name} Failed: {str(e)}")
-    except Exception as e:
-        logs.append(f"Boruta Selection Failed: {str(e)}")
-
     # Finalize
-        if best_global_model:
-            try:
-                headers = ["Phase", "Model", "Accuracy", "Time (s)"]
-                rows = []
-                for r in comparison_results:
-                    rows.append([
-                        str(r.get('phase', '')),
-                        str(r.get('model', '')),
-                        f"{float(r.get('accuracy', 0.0))*100:.2f}%",
-                        f"{float(r.get('duration', 0.0)):.3f}"
-                    ])
-                widths = [len(h) for h in headers]
-                for row in rows:
-                    for i, val in enumerate(row):
-                        if len(val) > widths[i]:
-                            widths[i] = len(val)
-                def fmt_row(row_vals):
-                    return " | ".join(val.ljust(widths[i]) for i, val in enumerate(row_vals))
-                line = "-+-".join("-"*w for w in widths)
-                table_lines = []
-                table_lines.append(fmt_row(headers))
-                table_lines.append(line)
-                for row in rows:
-                    table_lines.append(fmt_row(row))
-                table_str = "\n".join(table_lines)
-                logs.append("\n=== Summary Table ===")
-                logs.append(table_str)
-                print("\n=== Summary Table ===")
-                print(table_str)
+    if best_global_model:
+        try:
+            headers = ["Phase", "Model", "Accuracy", "Time (s)"]
+            rows = []
+            for r in comparison_results:
+                rows.append([
+                    str(r.get('phase', '')),
+                    str(r.get('model', '')),
+                    f"{float(r.get('accuracy', 0.0))*100:.2f}%",
+                    f"{float(r.get('duration', 0.0)):.3f}"
+                ])
+            widths = [len(h) for h in headers]
+            for row in rows:
+                for i, val in enumerate(row):
+                    if len(val) > widths[i]:
+                        widths[i] = len(val)
+            def fmt_row(row_vals):
+                return " | ".join(val.ljust(widths[i]) for i, val in enumerate(row_vals))
+            line = "-+-".join("-"*w for w in widths)
+            table_lines = []
+            table_lines.append(fmt_row(headers))
+            table_lines.append(line)
+            for row in rows:
+                table_lines.append(fmt_row(row))
+            table_str = "\n".join(table_lines)
+            logs.append("\n=== Summary Table ===")
+            logs.append(table_str)
+            print("\n=== Summary Table ===")
+            print(table_str)
 
-                # Process table (feature counts per phase)
-                proc_headers = ["Phase", "Features"]
-                base_features = X_train.shape[1] if hasattr(X_train, 'shape') else None
-                proc_rows = []
-                proc_rows.append(["Baseline", str(base_features) if base_features is not None else "-"])
-                proc_rows.append(["RFE", str(len(selected_rfe_cols)) if selected_rfe_cols else "-"])
-                proc_rows.append(["Boruta", str(len(selected_bfs_cols)) if selected_bfs_cols else "-"])
-                proc_widths = [len(h) for h in proc_headers]
-                for row in proc_rows:
-                    for i, val in enumerate(row):
-                        if len(val) > proc_widths[i]:
-                            proc_widths[i] = len(val)
-                def fmt_proc(row_vals):
-                    return " | ".join(val.ljust(proc_widths[i]) for i, val in enumerate(row_vals))
-                proc_line = "-+-".join("-"*w for w in proc_widths)
-                proc_table_lines = [fmt_proc(proc_headers), proc_line]
-                for row in proc_rows:
-                    proc_table_lines.append(fmt_proc(row))
-                proc_table_str = "\n".join(proc_table_lines)
-                logs.append("\n=== Process Table ===")
-                logs.append(proc_table_str)
-                print("\n=== Process Table ===")
-                print(proc_table_str)
-            except Exception as e:
-                logs.append(f"Failed to render summary table: {str(e)}")
-            sessions[session_id]['best_model'] = (best_global_name, best_global_model)
-            sessions[session_id]['status'] = 'trained'
-            sessions[session_id]['progress'] = 80
-            sessions[session_id]['training_logs'] = logs
-            sessions[session_id]['comparison_results'] = comparison_results
-            
-            return jsonify({
-                'message': 'Training & Comparison Complete',
-                'best_model': best_global_name,
-                'train_score': best_global_score,
-                'logs': logs,
-                'comparison': comparison_results,
-                'process_summary': [
-                    {'phase': 'Baseline', 'features': base_features},
-                    {'phase': 'RFE', 'features': len(selected_rfe_cols) if selected_rfe_cols else 0},
-                    {'phase': 'Boruta', 'features': len(selected_bfs_cols) if selected_bfs_cols else 0}
-                ]
-            })
+            # Process table (feature counts per phase)
+            proc_headers = ["Phase", "Features"]
+            base_features = X_train.shape[1] if hasattr(X_train, 'shape') else None
+            proc_rows = []
+            proc_rows.append(["Baseline", str(base_features) if base_features is not None else "-"])
+            proc_rows.append(["RFE", str(len(selected_rfe_cols)) if selected_rfe_cols else "-"])
+            proc_widths = [len(h) for h in proc_headers]
+            for row in proc_rows:
+                for i, val in enumerate(row):
+                    if len(val) > proc_widths[i]:
+                        proc_widths[i] = len(val)
+            def fmt_proc(row_vals):
+                return " | ".join(val.ljust(proc_widths[i]) for i, val in enumerate(row_vals))
+            proc_line = "-+-".join("-"*w for w in proc_widths)
+            proc_table_lines = [fmt_proc(proc_headers), proc_line]
+            for row in proc_rows:
+                proc_table_lines.append(fmt_proc(row))
+            proc_table_str = "\n".join(proc_table_lines)
+            logs.append("\n=== Process Table ===")
+            logs.append(proc_table_str)
+            print("\n=== Process Table ===")
+            print(proc_table_str)
+        except Exception as e:
+            logs.append(f"Failed to render summary table: {str(e)}")
+        sessions[session_id]['best_model'] = (best_global_name, best_global_model)
+        sessions[session_id]['status'] = 'trained'
+        sessions[session_id]['progress'] = 80
+        sessions[session_id]['training_logs'] = logs
+        sessions[session_id]['comparison_results'] = comparison_results
+        
+        return jsonify({
+            'message': 'Training & Comparison Complete',
+            'best_model': best_global_name,
+            'val_score': best_global_score,
+            'logs': logs,
+            'comparison': comparison_results,
+            'rfe_feature_scores': rfe_scores,
+            'process_summary': [
+                {'phase': 'Baseline', 'features': base_features},
+                {'phase': 'RFE', 'features': len(selected_rfe_cols) if selected_rfe_cols else 0}
+            ]
+        })
     else:
         return jsonify({'error': 'All training attempts failed', 'logs': logs}), 500
 
