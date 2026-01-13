@@ -35,6 +35,7 @@ CORS(app)
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 MODEL_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'models')
 ALLOWED_EXTENSIONS = {'csv'}
+IGNORE_COLS = {'No', 'no_rm', 'nama_pasien', 'tanggal', 'tempat_tanggal_lahir', 'no', 'rm', 'nama', 'date', 'dob', 'id', 'patient_id', 'created_at', 'updated_at'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MODEL_FOLDER'] = MODEL_FOLDER
@@ -78,10 +79,42 @@ def init_db():
 init_db()
 
 
+# Load Pre-trained Manual Models
+MANUAL_MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'model')
+manual_models = {}
+
+def load_manual_models():
+    global manual_models
+    try:
+        rf_path = os.path.join(MANUAL_MODEL_DIR, 'rf_model_baseline.pkl')
+        lr_path = os.path.join(MANUAL_MODEL_DIR, 'lr_model_rfe.pkl')
+        
+        if os.path.exists(rf_path):
+            manual_models['rf_baseline'] = joblib.load(rf_path)
+            print(f"Loaded RF Baseline from {rf_path}")
+        
+        if os.path.exists(lr_path):
+            manual_models['lr_rfe'] = joblib.load(lr_path)
+            print(f"Loaded LR RFE from {lr_path}")
+            
+    except Exception as e:
+        print(f"Error loading manual models: {e}")
+
+load_manual_models()
+
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def normalize_df_columns(df):
+    # Drop ignored columns first (case insensitive check)
+    to_drop = []
+    for c in df.columns:
+        if c.strip().lower() in [i.lower() for i in IGNORE_COLS]:
+            to_drop.append(c)
+    if to_drop:
+        df = df.drop(columns=to_drop)
+
     mapping = {
         'usia': 'Usia',
         'jenis kelamin': 'Jenis Kelamin',
@@ -817,7 +850,8 @@ def training_details(session_id):
         'progress': s.get('progress'),
         'upload_path': s.get('upload_path'),
         'model_path': s.get('model_path'),
-        'metrics': s.get('metrics')
+        'metrics': s.get('metrics'),
+        'comparison_results': s.get('comparison_results')
     })
 
 @app.route('/api/training/sessions', methods=['GET'])
@@ -999,7 +1033,11 @@ def predict_live():
     try:
         y_pred = model.predict(X_final)
         y_prob = model.predict_proba(X_final)[:, 1] if hasattr(model, 'predict_proba') else None
+        
         response = {'predictions': y_pred.tolist()}
+        if y_prob is not None:
+            response['probabilities'] = y_prob.tolist()
+            
         if y_true is not None:
             response['metrics'] = calculate_metrics(y_true, y_pred, y_prob)
         return jsonify(response)
@@ -1007,5 +1045,193 @@ def predict_live():
         return jsonify({'error': f'Prediction failed (model inference): {str(e)}'}), 400
 
 
+@app.route('/api/models/upload', methods=['POST'])
+def upload_model():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    if not ('.' in file.filename and file.filename.rsplit('.', 1)[1].lower() == 'joblib'):
+        return jsonify({'error': 'File must be .joblib'}), 400
+    
+    try:
+        session_id = str(uuid.uuid4())
+        filename = secure_filename(file.filename)
+        model_path = os.path.join(app.config['MODEL_FOLDER'], f"{session_id}.joblib")
+        file.save(model_path)
+        
+        # Verify it's a valid model bundle
+        try:
+            bundle = joblib.load(model_path)
+            if not isinstance(bundle, dict) or 'model' not in bundle or 'pipeline' not in bundle:
+                os.remove(model_path)
+                return jsonify({'error': 'Invalid model file format'}), 400
+        except Exception:
+            os.remove(model_path)
+            return jsonify({'error': 'Corrupt model file'}), 400
+            
+        sessions[session_id] = {
+            'id': session_id,
+            'name': filename.rsplit('.', 1)[0],
+            'status': 'saved',
+            'progress': 100,
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow(),
+            'model_path': model_path,
+            'metrics': {}
+        }
+        
+        # Persist to DB if available
+        conn = get_db_connection()
+        if conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO training_sessions (id, status, progress, created_at, updated_at, model_path, metrics)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (session_id, 'saved', 100, datetime.utcnow(), datetime.utcnow(), model_path, json.dumps({})))
+            conn.close()
+            
+        return jsonify({'message': 'Model uploaded successfully', 'id': session_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# --- Manual Model Loading & Prediction ---
+MANUAL_MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'model')
+manual_models = {}
+
+def load_manual_models():
+    global manual_models
+    try:
+        rf_path = os.path.join(MANUAL_MODEL_DIR, 'rf_model_baseline.pkl')
+        lr_path = os.path.join(MANUAL_MODEL_DIR, 'lr_model_rfe.pkl')
+        
+        if os.path.exists(rf_path):
+            manual_models['rf_baseline'] = joblib.load(rf_path)
+            print(f"Loaded RF Baseline from {rf_path}")
+        
+        if os.path.exists(lr_path):
+            manual_models['lr_rfe'] = joblib.load(lr_path)
+            print(f"Loaded LR RFE from {lr_path}")
+            
+    except Exception as e:
+        print(f"Error loading manual models: {e}")
+
+load_manual_models()
+
+@app.route('/api/predict/manual', methods=['POST'])
+def predict_manual():
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No input data provided'}), 400
+        
+    model_type = data.get('model_type', 'rf_baseline')
+    
+    if model_type not in manual_models:
+        return jsonify({'error': f'Model {model_type} not found (available: {list(manual_models.keys())})'}), 404
+        
+    model = manual_models[model_type]
+    
+    def map_val(val):
+        if isinstance(val, (int, float)): return int(val)
+        s = str(val).lower().strip()
+        if s in ['yes', 'ya', 'positive', 'positif', 'laki-laki', 'pria', 'male', '1', 'true']: return 1
+        return 0
+    
+    # Feature construction
+    rf_cols = ['Usia', 'Jenis_Kelamin', 'Kehamilan', 'Poliuria', 'Polidipsia', 'penurunan_bb', 
+               'mudah_lelah', 'Polifagia', 'infeksi', 'penglihatan_kabur', 'Gatal', 'Irritability', 
+               'penyembuhan_lambat', 'kesemutan', 'kekakuan otot', 'kerontokan_rambut', 'genetik_diabetes', 'obesitas']
+    
+    key_map = {
+        'age': 'Usia',
+        'gender': 'Jenis_Kelamin', 
+        'pregnancy': 'Kehamilan',
+        'polyuria': 'Poliuria',
+        'polydipsia': 'Polidipsia',
+        'weight_loss': 'penurunan_bb',
+        'weakness': 'mudah_lelah',
+        'polyphagia': 'Polifagia',
+        'genital_thrush': 'infeksi',
+        'visual_blurring': 'penglihatan_kabur',
+        'itching': 'Gatal',
+        'irritability': 'Irritability',
+        'delayed_healing': 'penyembuhan_lambat',
+        'partial_paresis': 'kesemutan',
+        'muscle_stiffness': 'kekakuan otot',
+        'alopecia': 'kerontokan_rambut',
+        'obesity': 'obesitas',
+        'genetics': 'genetik_diabetes'
+    }
+    
+    if model_type == 'rf_baseline':
+        row = {}
+        for k, col in key_map.items():
+            val = data.get(k)
+            if k == 'age':
+                row[col] = float(val) if val is not None else 0
+            else:
+                row[col] = map_val(val)
+        
+        # Ensure 'genetik_diabetes' if missed
+        if 'genetik_diabetes' not in row:
+             row['genetik_diabetes'] = map_val(data.get('genetics', 0))
+
+        X = pd.DataFrame([row])
+        for c in rf_cols:
+            if c not in X.columns:
+                X[c] = 0
+        X = X[rf_cols]
+        
+    elif model_type == 'lr_rfe':
+        lr_row = {}
+        lr_row['Usia'] = float(data.get('age', 0))
+        
+        gender_val = str(data.get('gender', '')).lower()
+        lr_row['Jenis_Kelamin_P'] = 1 if gender_val in ['perempuan', 'wanita', 'female'] else 0
+        
+        lr_row['Kehamilan_Yes'] = map_val(data.get('pregnancy'))
+        lr_row['Polidipsia_Yes'] = map_val(data.get('polydipsia'))
+        lr_row['penurunan_bb_Yes'] = map_val(data.get('weight_loss'))
+        lr_row['mudah_lelah_Yes'] = map_val(data.get('weakness'))
+        lr_row['penglihatan_kabur_Yes'] = map_val(data.get('visual_blurring'))
+        lr_row['kesemutan_Yes'] = map_val(data.get('partial_paresis'))
+        
+        # Note: 'Jenis_Kelamin_P' is not in LR feature list?
+        # Wait, my inspection said: ['Usia', 'Jenis_Kelamin_P', 'Kehamilan_Yes', ...]
+        # So yes it is.
+        
+        X = pd.DataFrame([lr_row])
+        lr_cols = ['Usia', 'Jenis_Kelamin_P', 'Kehamilan_Yes', 'Polidipsia_Yes', 'penurunan_bb_Yes', 'mudah_lelah_Yes', 'penglihatan_kabur_Yes', 'kesemutan_Yes']
+        for c in lr_cols:
+            if c not in X.columns:
+                X[c] = 0
+        X = X[lr_cols]
+
+    try:
+        pred = model.predict(X)[0]
+        prob = model.predict_proba(X)[0][1] if hasattr(model, 'predict_proba') else None
+        
+        # Handle string predictions (Positive/Negative)
+        prediction_val = pred
+        if isinstance(pred, str):
+            if pred.lower() in ['positive', 'positif', 'yes', 'ya', '1']:
+                prediction_val = 1
+            else:
+                prediction_val = 0
+        else:
+            prediction_val = int(pred)
+            
+        return jsonify({
+            'prediction': prediction_val,
+            'probability': float(prob) if prob is not None else None,
+            'model_used': model_type
+        })
+    except Exception as e:
+        return jsonify({'error': f"Prediction failed: {str(e)}"}), 500
+
+
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)

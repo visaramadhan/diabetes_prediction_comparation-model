@@ -15,6 +15,11 @@
     "static/development/_middlewareManifest.js"
   ],
   "pages": {
+    "/": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/index.js"
+    ],
     "/_app": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
@@ -25,15 +30,10 @@
       "static/chunks/main.js",
       "static/chunks/pages/_error.js"
     ],
-    "/sessions": [
+    "/live-prediction": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
-      "static/chunks/pages/sessions.js"
-    ],
-    "/training": [
-      "static/chunks/webpack.js",
-      "static/chunks/main.js",
-      "static/chunks/pages/training.js"
+      "static/chunks/pages/live-prediction.js"
     ]
   },
   "ampFirstPages": []

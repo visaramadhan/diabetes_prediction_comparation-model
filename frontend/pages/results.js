@@ -85,33 +85,150 @@ export default function Results() {
     }
   }
 
-  // Helper to render metrics for Quick Result (which has different structure)
   const renderQuickResult = () => {
     if (!quickResult) return null
     const bestModel = getBestModel(quickResult)
-    // Reuse the visualization logic or components if possible
-    // For now, simple render to ensure it works
+    
+    // Transform data for charts
+    const modelLabels = ['Random Forest', 'SVM', 'Logistic Regression']
+    const accuracyData = [
+      quickResult.baseline?.random_forest?.accuracy || 0,
+      quickResult.baseline?.svm?.accuracy || 0,
+      quickResult.baseline?.logistic_regression?.accuracy || 0
+    ]
+    
+    const chartData = {
+      labels: modelLabels,
+      datasets: [
+        {
+          label: 'Akurasi Baseline',
+          data: accuracyData,
+          backgroundColor: 'rgba(53, 162, 235, 0.5)',
+          borderColor: 'rgb(53, 162, 235)',
+          borderWidth: 1,
+        },
+      ],
+    }
+
     return (
       <div className="bg-white p-6 rounded-lg shadow-md">
         <h2 className="text-2xl font-bold text-gray-900 mb-6">Hasil Quick Upload</h2>
-        <div className="mb-6">
-           <h3 className="text-lg font-semibold">Model Terbaik: {bestModel.modelName} ({bestModel.selectionMethod})</h3>
-           <p>Akurasi: {(bestModel.metrics.accuracy * 100).toFixed(2)}%</p>
-           <p>F1 Score: {(bestModel.metrics.f1 * 100).toFixed(2)}%</p>
+        <div className="mb-6 p-4 bg-green-50 border border-green-100 rounded-lg">
+           <h3 className="text-lg font-semibold text-green-800">Model Terbaik: {bestModel.modelName} ({bestModel.selectionMethod})</h3>
+           <p className="text-green-700">Akurasi: {(bestModel.metrics.accuracy * 100).toFixed(2)}%</p>
+           <p className="text-green-700">F1 Score: {(bestModel.metrics.f1 * 100).toFixed(2)}%</p>
         </div>
-        <div className="grid md:grid-cols-2 gap-8">
-           <div>
-             <h4 className="font-medium mb-2">Perbandingan Akurasi</h4>
-             <Bar 
-               data={{
-                 labels: ['Random Forest', 'SVM', 'Logistic Regression'],
-                 datasets: [
-                   { label: 'Baseline', data: [quickResult.baseline.random_forest.accuracy, quickResult.baseline.svm.accuracy, quickResult.baseline.logistic_regression.accuracy], backgroundColor: 'rgba(14, 165, 233, 0.7)' },
-                   { label: 'RFE', data: [quickResult.rfe.random_forest.accuracy, quickResult.rfe.svm.accuracy, quickResult.rfe.logistic_regression.accuracy], backgroundColor: 'rgba(139, 92, 246, 0.7)' },
-                   { label: 'BFS', data: [quickResult.bfs.random_forest.accuracy, quickResult.bfs.svm.accuracy, quickResult.bfs.logistic_regression.accuracy], backgroundColor: 'rgba(34, 197, 94, 0.7)' }
-                 ]
-               }}
-             />
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="p-4 border rounded-lg">
+            <h4 className="text-md font-medium mb-4 text-center">Perbandingan Akurasi Model</h4>
+            <Bar data={chartData} options={{ responsive: true, scales: { y: { beginAtZero: true, max: 1 } } }} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const renderSessionDetails = () => {
+    if (!selectedSession || !selectedSession.comparison_results) return null
+    
+    // Prepare data for Bar Chart (Comparison)
+    const labels = selectedSession.comparison_results.map(r => `${r.model} (${r.phase})`)
+    const dataAcc = selectedSession.comparison_results.map(r => r.accuracy)
+    
+    const barData = {
+      labels,
+      datasets: [
+        {
+          label: 'Akurasi',
+          data: dataAcc,
+          backgroundColor: 'rgba(75, 192, 192, 0.6)',
+        }
+      ]
+    }
+    
+    // Prepare data for Radar Chart (Metrics of Best Model)
+    // Assuming we have detailed metrics for the best model stored in session metrics
+    // If not, we use the global metrics which usually come from the best model
+    const metrics = selectedSession.metrics || {}
+    const radarData = {
+      labels: ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'ROC AUC'],
+      datasets: [
+        {
+          label: 'Performa Model Terbaik',
+          data: [
+            metrics.accuracy || 0,
+            metrics.precision || 0,
+            metrics.recall || 0,
+            metrics.f1 || 0,
+            metrics.roc_auc || 0
+          ],
+          backgroundColor: 'rgba(255, 99, 132, 0.2)',
+          borderColor: 'rgba(255, 99, 132, 1)',
+          borderWidth: 1,
+        },
+      ],
+    }
+
+    return (
+      <div className="bg-white p-6 rounded-lg shadow-md mt-6">
+        <h2 className="text-2xl font-bold text-gray-900 mb-6">Analisis Sesi: {selectedSession.name || selectedSession.id}</h2>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Bar Chart */}
+          <div className="p-4 border rounded-lg">
+            <h3 className="text-lg font-medium mb-4 text-center">Perbandingan Akurasi Antar Model</h3>
+            <div className="h-64">
+              <Bar 
+                data={barData} 
+                options={{ 
+                  responsive: true, 
+                  maintainAspectRatio: false,
+                  scales: { y: { beginAtZero: true, max: 1 } } 
+                }} 
+              />
+            </div>
+          </div>
+          
+          {/* Radar Chart */}
+          <div className="p-4 border rounded-lg">
+            <h3 className="text-lg font-medium mb-4 text-center">Profil Performa Model Terbaik</h3>
+            <div className="h-64">
+              <Radar 
+                data={radarData} 
+                options={{ 
+                  responsive: true, 
+                  maintainAspectRatio: false,
+                  scales: { r: { min: 0, max: 1 } } 
+                }} 
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8">
+           <h3 className="text-lg font-medium mb-4">Detail Metrik</h3>
+           <div className="overflow-x-auto">
+             <table className="min-w-full divide-y divide-gray-200">
+               <thead className="bg-gray-50">
+                 <tr>
+                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model</th>
+                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phase</th>
+                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Akurasi</th>
+                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Durasi (s)</th>
+                 </tr>
+               </thead>
+               <tbody className="bg-white divide-y divide-gray-200">
+                 {selectedSession.comparison_results.map((res, idx) => (
+                   <tr key={idx}>
+                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{res.model}</td>
+                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{res.phase}</td>
+                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{(res.accuracy * 100).toFixed(2)}%</td>
+                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{parseFloat(res.duration).toFixed(3)}</td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
            </div>
         </div>
       </div>

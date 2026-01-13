@@ -20,6 +20,7 @@ export default function Training() {
   const [learningRate, setLearningRate] = useState(0.001)
   const [logs, setLogs] = useState([])
   const [comparison, setComparison] = useState(null)
+  const [rfeScores, setRfeScores] = useState(null)
   const router = useRouter()
 
   const createSession = async () => {
@@ -143,9 +144,10 @@ export default function Training() {
         learning_rate: learningRate
       }, { timeout: 300000 })
       setMessage(res.data.message)
-      setBestModel({ name: res.data.best_model, trainScore: res.data.train_score })
+      setBestModel({ name: res.data.best_model, valScore: res.data.val_score })
       setLogs(res.data.logs || [])
       setComparison(res.data.comparison || null)
+      setRfeScores(res.data.rfe_feature_scores || null)
     } catch (err) {
       setMessage(err.response?.data?.error || 'Terjadi kesalahan')
     } finally {
@@ -316,12 +318,37 @@ export default function Training() {
                 </table>
               </div>
             )}
+            
+            {rfeScores && (
+              <div className="mt-4 overflow-x-auto">
+                <h3 className="font-medium text-gray-900 mb-2">Skor Fitur (RFE)</h3>
+                <table className="min-w-full text-xs text-left text-gray-500">
+                  <thead className="bg-gray-50 text-gray-700 uppercase">
+                    <tr>
+                      <th className="px-3 py-2">Feature</th>
+                      <th className="px-3 py-2">Ranking</th>
+                      <th className="px-3 py-2">Importance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rfeScores.slice(0, 20).map((row, idx) => (
+                      <tr key={idx} className="border-b">
+                        <td className="px-3 py-2 font-medium text-gray-900">{row.feature}</td>
+                        <td className="px-3 py-2">{row.ranking}</td>
+                        <td className="px-3 py-2">{(row.importance * 100).toFixed(3)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[11px] text-gray-500 mt-1">Menampilkan 20 fitur teratas sesuai ranking/importance.</p>
+              </div>
+            )}
 
             {bestModel && (
               <div className="mt-4 p-3 bg-indigo-50 border border-indigo-100 rounded">
                 <p className="font-medium text-indigo-900">Hasil Terbaik:</p>
                 <p className="text-indigo-800">{bestModel.name}</p>
-                <p className="text-sm text-indigo-600">Train Score: {(bestModel.trainScore * 100).toFixed(2)}%</p>
+                <p className="text-sm text-indigo-600">Validation Score: {(bestModel.valScore * 100).toFixed(2)}%</p>
               </div>
             )}
           </div>
